@@ -1,0 +1,54 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace ThreadsCalc
+{
+    public class ThreadsCalculator
+    {
+        public int TotalCores { get; private set; }
+
+        public ThreadsCalculator()
+        {
+            // Default to the number of logical CPU cores.
+            TotalCores = Environment.ProcessorCount;
+        }
+
+        public ThreadsCalculator(int totalCores)
+        {
+            // Allow custom total cores (e.g., for testing or specific hardware configurations).
+            TotalCores = totalCores > 0
+                ? totalCores
+                : throw new ArgumentException("Total cores must be greater than 0.");
+        }
+
+        /// <summary>
+        /// Calculates the number of threads for each stage based on their weight.
+        /// </summary>
+        /// <param name="stages">A dictionary where the key is the stage name and the value is the weight.</param>
+        /// <returns>A dictionary where the key is the stage name and the value is the number of threads.</returns>
+        public Dictionary<string, int> CalculateThreads(Dictionary<string, double> stages)
+        {
+            if (stages == null || stages.Count == 0)
+            {
+                throw new ArgumentException("Stages dictionary cannot be null or empty.");
+            }
+
+            // Calculate total weight.
+            double totalWeight = stages.Values.Sum();
+
+            // Allocate threads proportionally based on weights.
+            Dictionary<string, int> threadAllocation = stages.ToDictionary(stage => stage.Key, stage => (int)Math.Round(stage.Value / totalWeight * TotalCores));
+
+            // Ensure at least 1 thread per stage.
+            foreach (var stage in threadAllocation.Where(x => x.Value < 1))
+            {
+                threadAllocation[stage.Key] = 1;
+            }
+
+            return threadAllocation;
+        }
+    }
+}
