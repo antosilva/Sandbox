@@ -1,0 +1,330 @@
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Net.Http;
+using System.Reflection;
+using System.Threading;
+using System.Threading.Tasks;
+using MethodDecorator.Fody.Interfaces;
+
+namespace perfs
+{
+    //[Conditional("DEBUG")]
+    [AttributeUsage(AttributeTargets.Method)]
+    public class PerformanceAuditAttribute : Attribute, IMethodDecorator
+    {
+        public string MethodName { get; set; }
+
+        public void Init(object instance, MethodBase method, object[] args)
+        {
+            MethodName = method.Name;
+            PerformanceAudit.Current.Begin(MethodName);
+        }
+
+        public void OnEntry()
+        {
+            // No additional logic needed here
+        }
+
+        public void OnExit()
+        {
+            PerformanceAudit.Current.End();
+        }
+
+        public void OnException(Exception exception)
+        {
+            // Handle exceptions if needed
+        }
+    }
+
+    //[Conditional("DEBUG")]
+    [AttributeUsage(AttributeTargets.Method)]
+    public class LogAttribute : Attribute, IMethodDecorator
+    {
+        private string _methodName;
+        private DateTimeOffset _startTime;
+        private object[] _args;
+        private ParameterInfo[] _parameters;
+
+        public void Init(object instance, MethodBase method, object[] args)
+        {
+            _methodName = method.Name;
+            _parameters = method.GetParameters();
+            _args = args;
+        }
+
+        public void OnEntry()
+        {
+            Console.WriteLine($"Entering method: {_methodName}");
+            for (int i = 0; i < _args.Length; i++)
+            {
+                Console.WriteLine($"  param: {_parameters[i].Name}={_args[i]}");
+            }
+
+            _startTime = DateTime.Now;
+        }
+
+        public void OnExit()
+        {
+            TimeSpan elapsed = DateTime.Now - _startTime;
+
+            Console.WriteLine($"Exiting method: {_methodName}");
+            Console.WriteLine($"Execution time: {elapsed.TotalMilliseconds:F2}ms");
+        }
+
+        public void OnException(Exception exception)
+        {
+            // Handle exceptions if needed
+        }
+    }
+
+    public class PerformanceAudit
+    {
+        // Use AsyncLocal to track current method trace context across async/await boundaries.
+        private readonly AsyncLocal<MethodTrace> _currentMethodTrace = new AsyncLocal<MethodTrace>();
+        private readonly Dictionary<int, ThreadTrace> _threadTraces = new Dictionary<int, ThreadTrace>();
+        private readonly object _lock = new object();
+
+        private static PerformanceAudit _current;
+
+        public static PerformanceAudit Current => _current ?? (_current = new PerformanceAudit());
+
+        //[Conditional("DEBUG")]
+        public void Begin(string methodName)
+        {
+            var threadId = Thread.CurrentThread.ManagedThreadId;
+            lock (_lock)
+            {
+                if (!_threadTraces.ContainsKey(threadId))
+                {
+                    _threadTraces[threadId] = new ThreadTrace(threadId);
+                }
+                var trace = new MethodTrace(methodName);
+                if (_currentMethodTrace.Value != null)
+                {
+                    _currentMethodTrace.Value.AddChild(trace);
+                }
+                else
+                {
+                    _threadTraces[threadId].AddRootTrace(trace);
+                }
+                _currentMethodTrace.Value = trace;
+                trace.Start();
+            }
+        }
+
+        //[Conditional("DEBUG")]
+        public void End()
+        {
+            lock (_lock)
+            {
+                var trace = _currentMethodTrace.Value;
+                if (trace != null)
+                {
+                    trace.Stop();
+                    _currentMethodTrace.Value = trace.Parent;
+                }
+            }
+        }
+
+        public MethodTrace GetCurrentMethodTrace()
+        {
+            return _currentMethodTrace.Value;
+        }
+
+        public void PrintResults()
+        {
+            lock (_lock)
+            {
+                foreach (var threadTrace in _threadTraces.Values)
+                {
+                    threadTrace.Print();
+                }
+            }
+        }
+    }
+
+    public class ThreadTrace
+    {
+        private readonly int _threadId;
+        private readonly List<MethodTrace> _rootTraces;
+
+        public ThreadTrace(int threadId)
+        {
+            _threadId = threadId;
+            _rootTraces = new List<MethodTrace>();
+        }
+
+        public void AddRootTrace(MethodTrace trace)
+        {
+            _rootTraces.Add(trace);
+        }
+
+        public void Print()
+        {
+            Console.WriteLine($"Thread ID: {_threadId}");
+            foreach (var rootTrace in _rootTraces)
+            {
+                rootTrace.Print();
+            }
+            Console.WriteLine();
+        }
+    }
+
+    public class MethodTrace
+    {
+        // Timing metrics.
+        private readonly string _methodName;
+        private readonly Stopwatch _stopwatch;
+        private readonly List<MethodTrace> _children;
+        private long _selfTime; // Method time spent excluding child methods.
+
+        // Granular metrics.
+        private long _startCpuTime;
+        private long _startMemory;
+        private long _endCpuTime;
+        private long _endMemory;
+        private int _gcCollections;
+
+        public MethodTrace Parent { get; private set; }
+
+        public MethodTrace(string methodName)
+        {
+            _methodName = methodName;
+            _stopwatch = new Stopwatch();
+            _children = new List<MethodTrace>();
+            _selfTime = 0;
+        }
+
+        public void Start()
+        {
+            _stopwatch.Start();
+            _startCpuTime = Process.GetCurrentProcess().TotalProcessorTime.Ticks;
+            _startMemory = GC.GetTotalMemory(false);
+            _gcCollections = GC.CollectionCount(0);
+        }
+
+        public void Stop()
+        {
+            _stopwatch.Stop();
+            _endCpuTime = Process.GetCurrentProcess().TotalProcessorTime.Ticks;
+            _endMemory = GC.GetTotalMemory(false);
+            _gcCollections = GC.CollectionCount(0) - _gcCollections;
+            CalculateSelfTime();
+        }
+
+        public void AddChild(MethodTrace child)
+        {
+            child.Parent = this;
+            _children.Add(child);
+        }
+
+        private void CalculateSelfTime()
+        {
+            long totalChildTime = 0;
+            foreach (var child in _children)
+            {
+                totalChildTime += child._stopwatch.ElapsedMilliseconds;
+            }
+            _selfTime = _stopwatch.ElapsedMilliseconds - totalChildTime;
+        }
+
+        public void Print(int indentLevel = 0)
+        {
+            Console.WriteLine($"{new string(' ', indentLevel * 2)}{_methodName}: " +
+                              $"Total Time = {_stopwatch.ElapsedMilliseconds} ms, " +
+                              $"Self Time = {_selfTime} ms, " +
+                              $"CPU Time = {(_endCpuTime - _startCpuTime) / TimeSpan.TicksPerMillisecond} ms, " +
+                              $"Memory Allocated = {(_endMemory - _startMemory) / 1024} KB, " +
+                              $"GC Collections = {_gcCollections}");
+            foreach (var child in _children)
+            {
+                child.Print(indentLevel + 1);
+            }
+        }
+    }
+
+    public class PerformanceAuditScope : IDisposable
+    {
+        public PerformanceAuditScope(string name)
+        {
+            PerformanceAudit.Current.Begin(name);
+        }
+
+        public void Dispose()
+        {
+            PerformanceAudit.Current.End();
+        }
+    }
+
+    class Program
+    {
+        static async Task Main(string[] args)
+        {
+            using (new PerformanceAuditScope("Main1"))
+            {
+                MethodA();
+                await MethodBAsync();
+            }
+
+            Test(s: "abc", n:1500);
+
+            PerformanceAudit.Current.Begin("Main2");
+            MethodA();
+            await MethodBAsync();
+            PerformanceAudit.Current.End();
+
+            PerformanceAudit.Current.Begin("Main3");
+            Task.Delay(2000).Wait();
+            PerformanceAudit.Current.End();
+
+            // Print results
+            PerformanceAudit.Current.PrintResults();
+        }
+
+        static void MethodA()
+        {
+            PerformanceAudit.Current.Begin("MethodA");
+
+            // Do some work.
+            Thread.Sleep(100);
+            AllocateMemory(1000);
+
+            PerformanceAudit.Current.End();
+        }
+
+        static async Task MethodBAsync()
+        {
+            PerformanceAudit.Current.Begin("MethodBAsync");
+
+            Thread.Sleep(200);
+            AllocateMemory(2000);
+
+            try
+            {
+                using var httpClient = new HttpClient();
+                var response = await httpClient.GetAsync("https://jsonplaceholder.typicode.com/posts/1");
+                response.EnsureSuccessStatusCode();
+                var content = await response.Content.ReadAsStringAsync();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Network I/O failed: {ex.Message}");
+            }
+
+            PerformanceAudit.Current.End();
+        }
+
+        [Log]
+        [PerformanceAudit( MethodName = "Test")]
+        static void Test(int n, string s, object toto = null)
+        {
+            Task.Delay(TimeSpan.FromSeconds(3)).Wait();
+        }
+
+        static void AllocateMemory(int sizeInKB)
+        {
+            var buffer = new byte[sizeInKB * 1024]; // Allocate memory
+        }
+    }
+}
