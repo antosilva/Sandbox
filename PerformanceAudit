@@ -7,6 +7,8 @@ using System.Threading;
 using System.Threading.Tasks;
 using MethodDecorator.Fody.Interfaces;
 
+// Package MethodDecorator.Fody needed.
+
 namespace perfs
 {
     //[Conditional("DEBUG")]
