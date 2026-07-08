@@ -1,6 +1,5 @@
 <#PSScriptInfo
 .VERSION 1.0.0
-.GUID 5e8e8e8e-8e8e-4e8e-8e8e-8e8e8e8e8e8e
 .AUTHOR Antonio DA SILVA
 .DESCRIPTION Runs dotnet tests on assemblies matching a pattern with NUnit 3 report output, timeout, and optional coverage.
 #>
