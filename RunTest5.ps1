@@ -1,7 +1,6 @@
 
 #Exploration test, may not work
 
-#Requires -Version 7.0
 <#
 .SYNOPSIS
     Runs .NET (C#) test assemblies through "dotnet test" for a Jenkins pipeline, producing
@@ -233,7 +232,7 @@ function Invoke-DotnetTestRunner {
     )
 
     $psi = [System.Diagnostics.ProcessStartInfo]::new('dotnet')
-    foreach ($a in $ArgumentList) { $psi.ArgumentList.Add($a) }
+    $psi.Arguments              = $ArgumentList -join ' '
     $psi.WorkingDirectory       = $WorkingDirectory
     $psi.UseShellExecute        = $false
     $psi.RedirectStandardOutput = $true
@@ -389,15 +388,15 @@ function Get-GroupedStats {
         [Parameter(Mandatory)][string]$KeyName
     )
 
-    $Groups | ForEach-Object {
-        $grp = $_
+    foreach ($grp in @($Groups)) {
+        $items = if ($grp.PSObject.Properties.Name -contains 'Group') { @($grp.Group) } else { @($grp) }
         $obj = [ordered]@{}
         $obj[$KeyName]      = $grp.Name
-        $obj['Total']       = $grp.Count
-        $obj['Passed']      = ($grp.Group | Where-Object { $_.Result -eq 'Passed' }).Count
-        $obj['Failed']      = ($grp.Group | Where-Object { $_.Result -eq 'Failed' }).Count
-        $obj['Skipped']     = ($grp.Group | Where-Object { $_.Result -in @('Skipped', 'Ignored') }).Count
-        $obj['DurationSec'] = [math]::Round((($grp.Group | Measure-Object -Property Duration -Sum).Sum), 2)
+        $obj['Total']       = @($items).Count
+        $obj['Passed']      = @($items | Where-Object { $_.Result -eq 'Passed' }).Count
+        $obj['Failed']      = @($items | Where-Object { $_.Result -eq 'Failed' }).Count
+        $obj['Skipped']     = @($items | Where-Object { $_.Result -in @('Skipped', 'Ignored') }).Count
+        $obj['DurationSec'] = [math]::Round((@($items | Measure-Object -Property Duration -Sum)).Sum, 2)
         [PSCustomObject]$obj
     }
 }
@@ -426,9 +425,9 @@ function Write-SummaryReport {
     Write-Host (($byCategory | Format-Table -AutoSize | Out-String).Trim())
 
     $grandTotal   = $Rows.Count
-    $grandPassed  = ($Rows | Where-Object { $_.Result -eq 'Passed' }).Count
-    $grandFailed  = ($Rows | Where-Object { $_.Result -eq 'Failed' }).Count
-    $grandSkipped = ($Rows | Where-Object { $_.Result -in @('Skipped', 'Ignored') }).Count
+    $grandPassed  = @($Rows | Where-Object { $_.Result -eq 'Passed' }).Count
+    $grandFailed  = @($Rows | Where-Object { $_.Result -eq 'Failed' }).Count
+    $grandSkipped = @($Rows | Where-Object { $_.Result -in @('Skipped', 'Ignored') }).Count
 
     Write-Host ""
     Write-Host "================ GRAND TOTAL ================" -ForegroundColor Cyan
